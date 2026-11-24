@@ -14,6 +14,8 @@ import db
 import handlers
 import roles
 import subscriptions
+from tips import commands as tips_commands
+from tips import store as tips_store
 
 logging.basicConfig(format="%(asctime)s %(name)s %(levelname)s %(message)s", level=logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -32,11 +34,13 @@ async def run() -> None:
     await db.init()
     try:
         await roles.load()
+        await tips_store.init()
 
         app = ApplicationBuilder().token(cfg.BOT_TOKEN).read_timeout(30).write_timeout(30).build()
         if app.job_queue is None:
             raise RuntimeError('JobQueue missing. Run: pip install "python-telegram-bot[job-queue]"')
         handlers.register(app)
+        tips_commands.register(app)  # tips engine: scheduling, /record, /tips, /settle ...
         app.job_queue.run_repeating(subscriptions.expiry_job, interval=3600, first=30)
 
         stop = asyncio.Event()

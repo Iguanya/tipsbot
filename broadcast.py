@@ -52,3 +52,32 @@ async def send_many(bot, targets, from_chat, message_id) -> tuple[int, int]:
         if i + BATCH < len(targets):
             await asyncio.sleep(1)
     return ok, len(targets) - ok
+
+
+async def _copy_id(bot, target, from_chat, message_id):
+    for _ in range(3):
+        try:
+            m = await bot.copy_message(chat_id=target, from_chat_id=from_chat, message_id=message_id)
+            return m.message_id
+        except RetryAfter as e:
+            await asyncio.sleep(e.retry_after + 1)
+        except Forbidden:
+            await db.mark_inactive(target)
+            log.info("Forbidden for %s (blocked / bot not admin)", target)
+            return None
+        except TelegramError as e:
+            log.warning("copy to %s failed: %s", target, e)
+            return None
+    return None
+
+
+async def copy_many(bot, targets, from_chat, message_id) -> list[tuple[int, int]]:
+    """Like send_many but returns [(chat_id, new_message_id)] for every successful send."""
+    out: list[tuple[int, int]] = []
+    for i in range(0, len(targets), BATCH):
+        batch = targets[i : i + BATCH]
+        res = await asyncio.gather(*(_copy_id(bot, t, from_chat, message_id) for t in batch))
+        out += [(t, r) for t, r in zip(batch, res) if r is not None]
+        if i + BATCH < len(targets):
+            await asyncio.sleep(1)
+    return out

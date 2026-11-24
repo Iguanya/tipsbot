@@ -17,6 +17,7 @@ import db
 import payments
 import roles
 import subscriptions as subs
+from tips import store as tips_store
 from payments import core, mpesa_daraja, mpesa_manual, stars
 
 log = logging.getLogger(__name__)
@@ -177,9 +178,19 @@ async def on_private_message(update, context):
 
 
 # ---------------- admin: publishing ----------------
+def _post_meta(msg):
+    """(kind, text, file_id) of an admin message, so manual tips can be saved in the database."""
+    for kind, obj in (("photo", msg.photo[-1] if msg.photo else None), ("video", msg.video),
+                      ("gif", msg.animation), ("document", msg.document)):
+        if obj:
+            return kind, msg.caption or "", obj.file_id
+    return "text", msg.text or "", None
+
+
 async def stage_post(update, context):
     msg = update.effective_message
     context.user_data["post"] = (msg.chat_id, msg.message_id)
+    context.user_data["post_meta"] = _post_meta(msg)
     kb = Kb([
         [Btn("🆓 Free", callback_data="pub:free"), Btn("💎 VIP", callback_data="pub:vip"),
          Btn("👑 VIP+", callback_data="pub:vipplus")],
@@ -195,6 +206,7 @@ async def on_publish(update, context):
     await q.answer()
     aud = q.data.split(":", 1)[1]
     post = context.user_data.pop("post", None)
+    meta = context.user_data.pop("post_meta", ("text", "", None))
     if aud == "cancel" or not post:
         await q.edit_message_text("Cancelled." if aud == "cancel" else "Nothing pending — send the content again.")
         return
@@ -209,7 +221,8 @@ async def on_publish(update, context):
         ok, fail = await broadcast.send_many(context.bot, targets, post[0], post[1])
         await db.execute("INSERT INTO broadcasts(admin_id,audience,ok,failed,created_at) VALUES(?,?,?,?,?)",
                          (admin_id, aud, ok, fail, db.now()))
-        await q.edit_message_text(f"✅ '{aud}': {ok} sent, {fail} failed.")
+        ref = await tips_store.log_post(admin_id, aud, meta[0], meta[1], meta[2], ok, fail)  # saved in the database
+        await q.edit_message_text(f"✅ '{aud}': {ok} sent, {fail} failed. Ref {ref}")
 
     context.application.create_task(job())  # don't block other updates (e.g. payments)
 
